@@ -1,8 +1,3 @@
-// https://github.com/antlr/grammars-v4
-// https://github.com/antlr/grammars-v4/blob/master/tsql/tsql.g4
-// http://codinggorilla.domemtech.com/?p=995
-
-// a in (34, test, 12, 'val'), 'test', b = 123, c = 'other test', d = 2017-01-01, e = "last ""test", d, exists e, f and (g or h)
 grammar Search;
 
 batch: search_condition search_sort? EOF;
@@ -42,7 +37,7 @@ test
     ;
 
 tag
-    : HT (ID | STRING)
+    : tagKey=HTID sep=':'? tagValue=(ID | STRING)?
     ;
 
 free
@@ -75,7 +70,8 @@ ID : CHAR CHAR_EXT*;             // match lower-case identifiers
 STRING:  (DQ_STRING | SQ_STRING);
 SQ_STRING: (SQ (NSQ | ESQ)* SQ);
 DQ_STRING: (DQ (NDQ | EDQ)* DQ);
-HT : '#';
+//HT : '#';
+HTID : '#' ID?;
 EXCLAMATION: '!';
 
 fragment CHAR : 'a'..'z'|'A'..'Z';

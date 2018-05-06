@@ -55,6 +55,8 @@ const libSearchParser = require('../gen/SearchParser');
 const libSearchListener = require('../gen/SearchListener');
 const libSearchVisitor = require('../gen/SearchVisitor');
 const libErrorListener = require('antlr4/error/ErrorListener');
+const libErrorStrategy = require('antlr4/error/ErrorStrategy');
+const libError = require('antlr4/error/Errors');
 
 function newHighlight() {
     return {
@@ -62,7 +64,8 @@ function newHighlight() {
         free: [],
         tags: [],
         ids: [],
-        sorts: []
+        sorts: [],
+        errors: []
     }
 }
 
@@ -75,18 +78,37 @@ function SearchErrorListener(errors) {
 SearchErrorListener.prototype = Object.create(libErrorListener.ErrorListener.prototype);
 SearchErrorListener.prototype.constructor = SearchErrorListener;
 SearchErrorListener.prototype.syntaxError = function (recognizer, offendingSymbol, line, column, msg, e) {
-    // console.error("==> line " + line + ":" + column + " " + msg);
-
-    const parser = recognizer._ctx.parser,
-        tokens = parser.getTokenStream().tokens;
-
-    // last token is always "fake" EOF token
-    if (tokens.length > 1) {
-        const lastToken = tokens[tokens.length - 2];
-        arguments.lastToken = parser.symbolicNames[lastToken.type];
+    if (e) {
+        // console.error("==> line " + line + ":" + column + " " + msg, recognizer, offendingSymbol, e);
+        // console.error(recognizer);
+        // console.error(recognizer.consume);
+        // recognizer.recoverFromMismatchedToken;
+        //return new libError.ParseCancellationException(); // "line " + line + ":" + column + " " + msg
+        // recognizer.consume();
+        // recognizer.consume();
+        // recognizer._errHandler.errorRecoveryMode = false;
     }
 
-    this.errors.push(arguments);
+    if(offendingSymbol != null) { // parser
+        highlightItems.errors.push([offendingSymbol.start, offendingSymbol.stop + 1]);
+    }
+    else // lexer
+    {
+        highlightItems.errors.push([recognizer._tokenStartCharIndex, recognizer._tokenStartCharIndex+1]);
+    }
+
+    if(recognizer._ctx) {
+        const parser = recognizer._ctx.parser,
+            tokens = parser.getTokenStream().tokens;
+
+        // last token is always "fake" EOF token
+        if (tokens.length > 1) {
+            const lastToken = tokens[tokens.length - 2];
+            arguments.lastToken = parser.symbolicNames[lastToken.type];
+        }
+
+        this.errors.push(arguments);
+    }
 };
 
 let SearchListenerAutoComplete = function () {};
@@ -101,14 +123,35 @@ SearchListenerAutoComplete.prototype.enterTest = function (ctx) {
 };
 
 SearchListenerAutoComplete.prototype.enterTag = function (ctx) {
-    let ht = ctx.HT();
+    let ht = ctx.HTID();
     if (ht != null) {
         highlightItems.tags.push([ctx.start.start, ctx.stop.stop + 1]);
     }
 
     if (ctx.start.start <= position && position <= ctx.stop.stop + 1) {
-        console.log("position", position, "ctx", ctx.stop.stop + 1);
+        // console.log("position", position, "ctx", ctx.stop.stop + 1);
         currentToken = ctx;
+        let key = "";
+        let value = "";
+        let keyId = ctx.HTID();
+        if (keyId != null) {
+            key = keyId.getText().toString().substring(1);
+        }
+        if (ctx.sep) {
+            value = "*";
+        }
+        let valueId = ctx.ID();
+        if (valueId != null) {
+            value = valueId.getText().toString();
+        }
+        let valueString = ctx.STRING();
+        if (valueString) {
+            value = valueString.getText().toString();
+        }
+        currentTokenOptions = [
+            key,
+            value
+        ];
     }
 };
 
@@ -141,7 +184,6 @@ SearchListenerAutoComplete.prototype.enterFree = function (ctx) {
 };
 
 SearchListenerAutoComplete.prototype.enterSearch_sort = function (ctx) {
-    // console.log(highlightItems);
     highlightItems.sorts.push([ctx.start.start, ctx.stop.stop + 1]);
 };
 
@@ -159,7 +201,6 @@ SearchVisitorSerializer.prototype.constructor = SearchVisitorSerializer;
 SearchVisitorSerializer.prototype.visitValue = function(ctx) {
     const str = ctx.STRING();
     if(str) {
-        // console.log('visit value', str.toString(), ctx);
         return str.getText().substr(1, str.getText().length-2).replace(new RegExp('""', 'g'), '"');
     }
     const id = ctx.ID();
@@ -207,17 +248,20 @@ SearchVisitorSerializer.prototype.visitFree = function(ctx) {
 };
 
 SearchVisitorSerializer.prototype.visitTag = function(ctx) {
+    const tagKey = ctx.HTID().getText();
     const str = ctx.STRING();
-    let tag = null;
+    let tagValue = null;
     if(str) {
-        tag = str.getText().substr(1, str.getText().length-2);
+        tagValue = str.getText().substr(1, str.getText().length-2);
     }
     const id = ctx.ID();
     if(id) {
-        tag = id.toString();
+        tagValue = id.getText();
     }
-    if(tag != null) {
-        return {'tag': tag};
+    if(tagValue != null) {
+        return {'tag': {'key':tagKey.substring(1), 'value':tagValue}};
+        // return {'tag': {'key':tagKey}};
+        // return 'a';
     }
 };
 
@@ -236,7 +280,13 @@ SearchVisitorSerializer.prototype.visitPredicate = function(ctx) {
     if(ps) {
         return this.visitChildren(ctx)[1];
     }
-    return this.visitChildren(ctx)[0];
+    if(ctx.children != null) {
+        let visitChildren = this.visitChildren(ctx);
+        if (visitChildren != null) {
+            return visitChildren[0];
+        }
+    }
+    return null;
 };
 
 SearchVisitorSerializer.prototype.visitSearch_condition = function(ctx) {
@@ -251,11 +301,13 @@ SearchVisitorSerializer.prototype.visitSearch_condition = function(ctx) {
 SearchVisitorSerializer.prototype.visitSearch_condition_not = function(ctx) {
     const not = ctx.NOT();
     const excl = ctx.EXCLAMATION();
-    let visitChildren = this.visitChildren(ctx);
-    if(not || excl) {
-        return {'not': visitChildren[1]}
+    if(ctx.children != null) {
+        let visitChildren = this.visitChildren(ctx);
+        if (not || excl) {
+            return {'not': visitChildren[1]}
+        }
+        return visitChildren[0];
     }
-    return visitChildren[0];
 };
 
 SearchVisitorSerializer.prototype.visitBatch = function(ctx) {
@@ -279,12 +331,18 @@ let $searchSerializedDiv = null;
 let textComplete = null;
 
 let currentToken = null;
+let currentTokenOptions = null;
 let searchText;
 let highlightItems = null;
 
 export default function init(id) {
     searchInputId = id;
     $searchInput = $("#"+searchInputId);
+    // autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+    $searchInput.attr("autocomplete", "off");
+    $searchInput.attr("autocorrect", "off");
+    $searchInput.attr("autocapitalize", "off");
+    $searchInput.attr("spellcheck", "false");
     $searchInput.addClass("hwt-input hwt-content");
     $searchInput.click(parse).change(parse).keyup(parse);
 
@@ -351,10 +409,20 @@ function parse() {
         let errors = [];
         const searchErrorlistener = new SearchErrorListener(errors);
 
+        lexer.removeErrorListeners();
+        lexer.addErrorListener(searchErrorlistener);
+
         parser.removeErrorListeners();
         parser.addErrorListener(searchErrorlistener);
 
+        // let errorStrategy = new libErrorStrategy.DefaultErrorStrategy();
+        // errorStrategy.errorRecoveryMode = true;
+        // console.log(errorStrategy);
+        // console.log(parser);
+        // parser._errHandler = errorStrategy;
+
         currentToken = null;
+        currentTokenOptions = null;
         const tree = parser.batch();
 
         libAntlr4.tree.ParseTreeWalker.DEFAULT.walk(searchListenerAutoComplete, tree);
@@ -372,64 +440,75 @@ function parse() {
 
                 // var tokens = parser.getTokenStream().tokens;
                 let tokenType = null;
+                let ruleName = null;
 
                 let options = [];
 
                 // last token is always "fake" EOF token
                 if (tokens.tokens.length > 1) {
-                    tokenType = parser.symbolicNames[currentToken.start.type];
+                    // console.log(parser);
+                    // console.log(currentToken);
+                    ruleName = parser.ruleNames[currentToken.ruleIndex];
+                    // tokenType = parser.symbolicNames[currentToken.start.type];
 
                     // this.tokenType = tokenType;
 
-                    if (tokenType === "HT") {
-                        options = [currentTokenValue, currentTokenValue + "123", currentTokenValue + "456", "#abc", "#bdef"];
+                    if (ruleName === "tag") {
+                        $.get({
+                            url:'http://localhost:3000/tags?key='+currentTokenOptions[0]+'&value='+currentTokenOptions[1],
+                            success: function(data){
 
-                        window.emojiStrategyReplace = function (name) {
-                            $searchInput.val(
-                                searchText.substring(0, currentToken.start.start) +
-                                name +
-                                searchText.substring(currentToken.stop.stop + 1)
-                            );
-                            $searchInput.caretTo(currentToken.start.start + name.length);
-                            return null;
-                        };
+                                // options = [currentTokenValue, currentTokenValue + "123", currentTokenValue + "456", "#abc", "#bdef"];
+                                // console.log(options);
+                                options = data.map(function(elt){return '#'+elt});
+                                console.log(options);
 
-                        window.emojiStrategy = {
-                            id: 'emoji',
-                            // match: /(^|\s):([a-z0-9+\-\_]*)$/,
-                            // match: /(^|\s)([#a-z0-9+\-\_]*)$/,
-                            match: /((#.*))$/,
-                            search: function (term, callback) {
-                                console.log("searchText ", term);
-                                callback(Object.keys(emojis).filter(function (name) {
-                                    return name.startsWith(term);
-                                }));
-                            },
-                            template: function (name) {
-                                return '<img src="' + emojis[name] + '"></img> ' + name;
-                            },
-                            // replace: function (name) {
-                            // console.log("replace ", name);
-                            // return '$1:' + name + ': ';
-                            // return '$1' + name + '';
-                            // return name;
-                            // }
-                            replace: window.emojiStrategyReplace
-                        };
+                                window.emojiStrategyReplace = function (name) {
+                                    $searchInput.val(
+                                        searchText.substring(0, currentToken.start.start) +
+                                        name +
+                                        searchText.substring(currentToken.stop.stop + 1)
+                                    );
+                                    $searchInput.caretTo(currentToken.start.start + name.length);
+                                    return null;
+                                };
+
+                                window.emojiStrategy = {
+                                    id: 'emoji',
+                                    // match: /(^|\s):([a-z0-9+\-\_]*)$/,
+                                    // match: /(^|\s)([#a-z0-9+\-\_]*)$/,
+                                    match: /((#.*))$/,
+                                    search: function (term, callback) {
+                                        // console.log("searchText ", term);
+                                        callback(Object.keys(emojis).filter(function (name) {
+                                            return name.startsWith(term);
+                                        }));
+                                    },
+                                    template: function (name) {
+                                        return '<img src="' + emojis[name] + '"></img> ' + name;
+                                    },
+                                    // replace: function (name) {
+                                    // return '$1:' + name + ': ';
+                                    // return '$1' + name + '';
+                                    // return name;
+                                    // }
+                                    replace: window.emojiStrategyReplace
+                                };
+
+                                options.forEach(function (args) {
+                                    window.emojis[args] = "";
+                                });
+
+                                // console.log("current: ", tokenType, currentTokenValue, options);
+
+                                // if(window.textComplete) {
+                                window.textComplete.refresh();
+                                window.textComplete.run(currentTokenValue);
+                                // }
+                            }
+                        });
                     }
-
-                    options.forEach(function (args) {
-                        window.emojis[args] = "";
-                    });
                 }
-
-                console.log("current: ", tokenType, currentTokenValue, options);
-
-                // if(window.textComplete) {
-                //     console.log("refresh");
-                window.textComplete.refresh();
-                window.textComplete.run(currentTokenValue);
-                // }
             } else {
                 window.emojiStrategy = null;
                 window.textComplete.refresh();
@@ -465,6 +544,10 @@ function parse() {
                 {
                     highlight: highlightItems.sorts,
                     className: 'orange'
+                },
+                {
+                    highlight: highlightItems.errors,
+                    className: 'error'
                 }
             ]
         }

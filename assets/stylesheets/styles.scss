@@ -103,6 +103,11 @@
   background-color: #ff9f57;
 }
 
+.hwt-content mark.error {
+  background-color: #ff1c0c;
+  text-decoration: black line-through;
+}
+
 
 
 
@@ -149,7 +154,7 @@
   @extend .usearch-container;
 }
 
-div#searchError {
+#searchError {
   background-color: #ffc9c9;
   font: 18px/25px 'Droid Sans Mono', sans-serif;
   padding: 10px;
@@ -157,4 +162,9 @@ div#searchError {
   &:empty {
     display: none;
   }
+}
+
+#searchSerialized {
+  background-color: #f8f8f8;
+  font: 12px 'DejaVu Sans Mono';
 }
