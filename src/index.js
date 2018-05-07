@@ -457,10 +457,16 @@ function parse() {
                         $.get({
                             url:'http://localhost:3000/tags?key='+currentTokenOptions[0]+'&value='+currentTokenOptions[1],
                             success: function(data){
-
-                                // options = [currentTokenValue, currentTokenValue + "123", currentTokenValue + "456", "#abc", "#bdef"];
-                                // console.log(options);
-                                options = data.map(function(elt){return '#'+elt});
+                                options = [];
+                                data.forEach(elt => {
+                                    if(elt.values) {
+                                        elt.values.map(val => {
+                                            options.push('#' + elt.key + ':' + val.value);
+                                        });
+                                    } else {
+                                        options.push('#' + elt.key);
+                                    }
+                                });
                                 console.log(options);
 
                                 window.emojiStrategyReplace = function (name) {
