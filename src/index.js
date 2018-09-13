@@ -1,6 +1,7 @@
 require("../assets/stylesheets/styles.scss");
 
 import highlight from './../node_modules/highlight-within-textarea/jquery.highlight-within-textarea';
+import _ from './../node_modules/underscore';
 
 var {Textcomplete, Textarea} = require('textcomplete');
 
@@ -64,6 +65,7 @@ function newHighlight() {
         free: [],
         tags: [],
         ids: [],
+        subject: [],
         sorts: [],
         errors: []
     }
@@ -137,9 +139,9 @@ SearchListenerAutoComplete.prototype.enterTag = function (ctx) {
         if (keyId != null) {
             key = keyId.getText().toString().substring(1);
         }
-        if (ctx.sep) {
-            value = "*";
-        }
+        // if (ctx.sep) {
+        //     value = "*";
+        // }
         let valueId = ctx.ID();
         if (valueId != null) {
             value = valueId.getText().toString();
@@ -170,6 +172,27 @@ SearchListenerAutoComplete.prototype.enterValue = function (ctx) {
     }
 
     highlightItems.values.push([ctx.start.start, ctx.stop.stop + 1]);
+};
+
+SearchListenerAutoComplete.prototype.enterSubject = function (ctx) {
+    highlightItems.subject.push([ctx.start.start, ctx.stop.stop + 1]);
+
+    if (ctx.start.start <= position && position <= ctx.stop.stop + 1) {
+        // console.log("position", position, "ctx", ctx.stop.stop + 1);
+        currentToken = ctx;
+        let value = "";
+        let valueId = ctx.ID();
+        if (valueId != null) {
+            value = valueId.getText().toString();
+        }
+        let valueString = ctx.STRING();
+        if (valueString) {
+            value = valueString.getText().toString();
+        }
+        currentTokenOptions = [
+            value
+        ];
+    }
 };
 
 SearchListenerAutoComplete.prototype.enterFree = function (ctx) {
@@ -247,6 +270,21 @@ SearchVisitorSerializer.prototype.visitFree = function(ctx) {
     }
 };
 
+SearchVisitorSerializer.prototype.visitSubject = function(ctx) {
+    const str = ctx.STRING();
+    let subject = null;
+    if(str) {
+        subject = str.getText().substr(1, str.getText().length-2);
+    }
+    const id = ctx.ID();
+    if(id) {
+        subject = id.getText();
+    }
+    if(subject != null) {
+        return {'account': subject};
+    }
+};
+
 SearchVisitorSerializer.prototype.visitTag = function(ctx) {
     const tagKey = ctx.HTID().getText();
     const str = ctx.STRING();
@@ -260,8 +298,6 @@ SearchVisitorSerializer.prototype.visitTag = function(ctx) {
     }
     if(tagValue != null) {
         return {'tag': {'key':tagKey.substring(1), 'value':tagValue}};
-        // return {'tag': {'key':tagKey}};
-        // return 'a';
     }
 };
 
@@ -446,30 +482,24 @@ function parse() {
 
                 // last token is always "fake" EOF token
                 if (tokens.tokens.length > 1) {
-                    // console.log(parser);
-                    // console.log(currentToken);
                     ruleName = parser.ruleNames[currentToken.ruleIndex];
                     // tokenType = parser.symbolicNames[currentToken.start.type];
 
-                    // this.tokenType = tokenType;
-
                     if (ruleName === "tag") {
                         $.get({
-                            url:'http://localhost:3000/tags?key='+currentTokenOptions[0]+'&value='+currentTokenOptions[1],
+                            // url:'http://localhost:3000/tags?key='+currentTokenOptions[0]+'&value='+currentTokenOptions[1],
+                            url:'https://localhost:19443/tags?filter='+currentTokenOptions[0]+
+                                (
+                                    (currentTokenOptions[1].length > 0 && currentTokenOptions[1] !== '*') ? (':'+currentTokenOptions[1].replace(/^"+|"+$/g, '')) : ''
+                                ),
                             success: function(data){
                                 options = [];
-                                data.forEach(elt => {
-                                    if(elt.values) {
-                                        elt.values.map(val => {
-                                            options.push('#' + elt.key + ':' + val.value);
-                                        });
-                                    } else {
-                                        options.push('#' + elt.key);
-                                    }
+                                data.items.forEach(elt => {
+                                    options.push(elt.key + ':' + elt.value);
                                 });
-                                console.log(options);
 
                                 window.emojiStrategyReplace = function (name) {
+                                    name = '#'+name;
                                     $searchInput.val(
                                         searchText.substring(0, currentToken.start.start) +
                                         name +
@@ -487,7 +517,8 @@ function parse() {
                                     search: function (term, callback) {
                                         // console.log("searchText ", term);
                                         callback(Object.keys(emojis).filter(function (name) {
-                                            return name.startsWith(term);
+                                            // console.log(name.indexOf(term.substr(1)), name, term.substr(1));
+                                            return name.indexOf(term.substr(1))>=0;
                                         }));
                                     },
                                     template: function (name) {
@@ -511,6 +542,53 @@ function parse() {
                                 window.textComplete.refresh();
                                 window.textComplete.run(currentTokenValue);
                                 // }
+                            }
+                        });
+                    }
+
+                    if (ruleName === "subject") {
+                        $.get({
+                            // url:'http://localhost:3000/tags?key='+currentTokenOptions[0]+'&value='+currentTokenOptions[1],
+                            url:'https://localhost:7442/accounts',
+                            success: function(data){
+                                options = [];
+                                data.items.forEach(elt => {
+                                    options.push(elt.name);
+                                });
+
+                                window.emojiStrategyReplace = function (name) {
+                                    name =  '@"' + name + '"';
+                                    $searchInput.val(
+                                        searchText.substring(0, currentToken.start.start) +
+                                        name +
+                                        searchText.substring(currentToken.stop.stop + 1)
+                                    );
+                                    $searchInput.caretTo(currentToken.start.start + name.length);
+                                    return null;
+                                };
+
+                                window.emojiStrategy = {
+                                    id: 'emoji',
+                                    match: /((@.*))$/,
+                                    search: function (term, callback) {
+                                        // console.log("searchText ", term);
+                                        callback(Object.keys(emojis).filter(function (name) {
+                                            // console.log(name.indexOf(term.substr(1)), name, term.substr(1));
+                                            return name.indexOf(term.substr(1).replace(/^"+|"+$/g, ''))>=0;
+                                        }));
+                                    },
+                                    template: function (name) {
+                                        return '<img src="' + emojis[name] + '"></img> ' + name;
+                                    },
+                                    replace: window.emojiStrategyReplace
+                                };
+
+                                options.forEach(function (args) {
+                                    window.emojis[args] = "";
+                                });
+
+                                window.textComplete.refresh();
+                                window.textComplete.run(currentTokenValue);
                             }
                         });
                     }
@@ -542,6 +620,10 @@ function parse() {
                 {
                     highlight: highlightItems.ids,
                     className: 'yellow'
+                },
+                {
+                    highlight: highlightItems.subject,
+                    className: 'pink'
                 },
                 {
                     highlight: highlightItems.free,
